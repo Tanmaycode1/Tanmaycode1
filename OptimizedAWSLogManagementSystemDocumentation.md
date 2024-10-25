@@ -1,316 +1,376 @@
-# Optimized AWS Log Management System Documentation
+# AWS Log Review System - Complete Documentation
 
-## Key Improvements Over Previous Version
-1. Centralized configuration management using AWS Systems Manager Parameter Store
-2. Enhanced error handling and retry mechanisms
-3. Batch processing for better performance
-4. Implemented caching for frequently accessed data
-5. Added monitoring and alerting
-6. Improved security with fine-grained IAM policies
-7. Cost optimization through log retention policies
-8. Added compression for stored reports
+## Table of Contents
+1. [System Overview](#1-system-overview)
+2. [Prerequisites](#2-prerequisites)
+3. [Installation Guide](#3-installation-guide)
+4. [Configuration](#4-configuration)
+5. [System Components](#5-system-components)
+6. [Usage Guide](#6-usage-guide)
+7. [Maintenance](#7-maintenance)
+8. [Troubleshooting](#8-troubleshooting)
+9. [Security Considerations](#9-security-considerations)
+10. [Compliance](#10-compliance)
+11. [Cost Optimization](#11-cost-optimization)
 
-## 1. Infrastructure Setup
+## 1. System Overview
 
-### 1.1 Log Group Creation Using CloudFormation
+### 1.1 Purpose
+This system provides automated daily log review reports for:
+- System Administrator Logs
+- Operator Logs
 
-Instead of creating log groups manually, use Infrastructure as Code (IaC):
+### 1.2 Architecture
+```plaintext
+CloudWatch Logs → Lambda → S3 (Evidence Storage)
+           ↑                    ↓
+    Log Sources          Evidence Reports
+```
+
+### 1.3 Key Features
+- Automated daily log reviews
+- Evidence generation and storage
+- Configurable alert thresholds
+- Compliance-ready reporting
+- Secure storage of review evidence
+
+## 2. Prerequisites
+
+### 2.1 AWS Services Required
+- AWS CloudWatch Logs
+- AWS Lambda
+- Amazon S3
+- AWS IAM
+- Amazon EventBridge
+
+### 2.2 Permissions Required
+- CloudWatch Logs access
+- S3 bucket creation and management
+- Lambda function creation and management
+- IAM role creation
+- EventBridge rule creation
+
+### 2.3 Resource Requirements
+```yaml
+Minimum Lambda Configuration:
+  Memory: 256 MB
+  Timeout: 5 minutes
+  Runtime: Python 3.9+
+```
+
+## 3. Installation Guide
+
+### 3.1 CloudFormation Template
 
 ```yaml
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Log Review System Infrastructure'
+
 Resources:
-  AdminLogGroup:
+  # Log Groups
+  SystemAdminLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: /admin/logs
-      RetentionInDays: 30  # Optimize costs with retention policy
-      Tags:
-        - Key: Environment
-          Value: Production
-        - Key: Purpose
-          Value: AdminLogs
-
+      LogGroupName: /system/admin/logs
+      RetentionInDays: 90
+      
   OperatorLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: /operator/logs
-      RetentionInDays: 30
-      Tags:
-        - Key: Environment
-          Value: Production
-        - Key: Purpose
-          Value: OperatorLogs
+      LogGroupName: /system/operator/logs
+      RetentionInDays: 90
+
+  # S3 Bucket for Evidence
+  LogReviewEvidenceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${AWS::StackName}-log-review-evidence'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # Lambda Function Role
+  LogReviewLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: LogReviewPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:StartQuery
+                  - logs:GetQueryResults
+                Resource:
+                  - !GetAtt SystemAdminLogGroup.Arn
+                  - !GetAtt OperatorLogGroup.Arn
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub '${LogReviewEvidenceBucket.Arn}/*'
+
+  # Lambda Function
+  LogReviewFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LogReviewLambdaRole.Arn
+      Code:
+        ZipFile: |
+          [Lambda Function Code Goes Here]
+      Runtime: python3.9
+      Timeout: 300
+      MemorySize: 256
+      Environment:
+        Variables:
+          EVIDENCE_BUCKET: !Ref LogReviewEvidenceBucket
+
+  # EventBridge Rule
+  DailyLogReviewRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: daily-log-review-trigger
+      Description: "Triggers daily log review Lambda function"
+      ScheduleExpression: "cron(0 1 * * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt LogReviewFunction.Arn
+          Id: "DailyLogReviewLambda"
 ```
 
-### 1.2 Centralized Configuration
+### 3.2 Deployment Steps
 
-Store configuration in AWS Systems Manager Parameter Store:
+1. **Prepare Environment**:
+```bash
+# Create deployment bucket
+aws s3 mb s3://log-review-deployment-bucket
 
-```json
-{
-  "LogConfig": {
-    "AdminLogGroup": "/admin/logs",
-    "OperatorLogGroup": "/operator/logs",
-    "ReportBucket": "your-log-review-bucket",
-    "RetentionDays": 30,
-    "QueryTimeoutSeconds": 300,
-    "BatchSize": 1000,
-    "AlertThresholds": {
-      "ErrorRate": 0.05,
-      "LatencyMs": 1000
-    }
-  }
-}
+# Package Lambda code
+zip -r function.zip .
 ```
 
-## 2. Enhanced CloudWatch Agent Configuration
-
-### 2.1 Optimized Agent Configuration
-
-```json
-{
-  "agent": {
-    "metrics_collection_interval": 60,
-    "run_as_user": "cwagent"
-  },
-  "logs": {
-    "logs_collected": {
-      "files": {
-        "collect_list": [
-          {
-            "file_path": "/var/log/admin.log",
-            "log_group_name": "/admin/logs",
-            "log_stream_name": "{instance_id}-admin",
-            "timestamp_format": "%Y-%m-%d %H:%M:%S",
-            "multi_line_start_pattern": "^\\d{4}-\\d{2}-\\d{2}",
-            "encoding": "utf-8",
-            "initial_position": "start_of_file",
-            "buffer_duration": 5000
-          }
-        ]
-      }
-    },
-    "force_flush_interval": 15
-  }
-}
+2. **Deploy CloudFormation**:
+```bash
+aws cloudformation create-stack \
+  --stack-name log-review-system \
+  --template-body file://template.yaml \
+  --capabilities CAPABILITY_IAM
 ```
 
-## 3. Optimized Lambda Function
+3. **Verify Deployment**:
+```bash
+aws cloudformation describe-stacks \
+  --stack-name log-review-system
+```
 
-### 3.1 Main Lambda Handler
+## 4. Configuration
 
+### 4.1 Lambda Environment Variables
+```plaintext
+EVIDENCE_BUCKET: Name of S3 bucket for storing evidence
+LOG_LEVEL: INFO (or DEBUG for troubleshooting)
+RETENTION_DAYS: 90
+```
+
+### 4.2 Log Query Configuration
 ```python
-import boto3
-import json
-from datetime import datetime, timedelta
-from typing import Dict, List
-from boto3.dynamodb.conditions import Key
-import gzip
-import base64
-
-class LogProcessor:
-    def __init__(self):
-        self.logs_client = boto3.client('logs')
-        self.s3_client = boto3.client('s3')
-        self.ssm_client = boto3.client('ssm')
-        self.config = self._load_config()
-        self.cache = {}
-
-    def _load_config(self) -> Dict:
-        response = self.ssm_client.get_parameter(
-            Name='/log-processor/config',
-            WithDecryption=True
-        )
-        return json.loads(response['Parameter']['Value'])
-
-    async def process_logs(self, start_time: int, end_time: int) -> List[Dict]:
-        tasks = []
-        for log_group in self.config['LogGroups']:
-            task = self._process_log_group(
-                log_group, 
-                start_time, 
-                end_time
-            )
-            tasks.append(task)
-        
-        return await asyncio.gather(*tasks)
-
-    def _process_log_group(self, log_group: str, start_time: int, end_time: int) -> Dict:
-        query_id = self._start_query(log_group, start_time, end_time)
-        results = self._get_query_results(query_id)
-        return self._analyze_results(results)
-
-    def _compress_report(self, report_content: str) -> bytes:
-        return gzip.compress(report_content.encode('utf-8'))
-
-    def save_report(self, report_content: str, date: datetime):
-        compressed_content = self._compress_report(report_content)
-        key = f"reports/{date.strftime('%Y/%m/%d')}/log_review.gz"
-        
-        self.s3_client.put_object(
-            Bucket=self.config['ReportBucket'],
-            Key=key,
-            Body=compressed_content,
-            ContentEncoding='gzip',
-            ContentType='text/plain',
-            Metadata={
-                'GeneratedDate': date.isoformat()
-            }
-        )
-
-def lambda_handler(event: Dict, context) -> Dict:
-    processor = LogProcessor()
-    
-    end_time = int(datetime.now().timestamp())
-    start_time = int((datetime.now() - timedelta(hours=24)).timestamp())
-    
-    try:
-        results = asyncio.run(processor.process_logs(start_time, end_time))
-        report = processor.generate_report(results)
-        processor.save_report(report, datetime.now())
-        
-        return {
-            'statusCode': 200,
-            'body': json.dumps({'message': 'Log processing completed successfully'})
-        }
-    except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': json.dumps({'error': str(e)})
-        }
+DEFAULT_QUERY = """
+    fields @timestamp, @message
+    | filter @message like /error/ 
+        or @message like /warning/ 
+        or @message like /critical/
+    | sort @timestamp desc
+"""
 ```
 
-### 3.2 Fine-Grained IAM Policy
+## 5. System Components
 
-```json
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "logs:StartQuery",
-                "logs:GetQueryResults"
-            ],
-            "Resource": [
-                "arn:aws:logs:*:*:log-group:/admin/logs:*",
-                "arn:aws:logs:*:*:log-group:/operator/logs:*"
-            ]
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "s3:PutObject"
-            ],
-            "Resource": "arn:aws:s3:::your-log-review-bucket/reports/*",
-            "Condition": {
-                "StringEquals": {
-                    "s3:x-amz-server-side-encryption": "AES256"
-                }
-            }
-        },
-        {
-            "Effect": "Allow",
-            "Action": [
-                "ssm:GetParameter"
-            ],
-            "Resource": "arn:aws:ssm:*:*:parameter/log-processor/*"
-        }
-    ]
-}
+### 5.1 Lambda Function Code
+```python
+[Previous Lambda Function Code]
 ```
 
-## 4. Monitoring and Alerting
+### 5.2 Evidence Report Format
+```plaintext
+Daily Log Review Report - {DATE}
+==================================================
 
-### 4.1 CloudWatch Dashboard
+ADMIN LOGS REVIEW
+--------------------
+[Findings]
 
-```yaml
-Dashboards:
-  LogProcessing:
-    Type: AWS::CloudWatch::Dashboard
-    Properties:
-      DashboardName: LogProcessingMetrics
-      DashboardBody: 
-        widgets:
-          - type: metric
-            properties:
-              metrics:
-                - [ "LogProcessor", "ProcessingTime", "LogGroup", "/admin/logs" ]
-                - [ "LogProcessor", "ProcessingTime", "LogGroup", "/operator/logs" ]
-              period: 300
-              stat: Average
-              region: ${AWS::Region}
-              title: Log Processing Time
+OPERATOR LOGS REVIEW
+--------------------
+[Findings]
+
+Review Metadata:
+- Review Date: {DATE}
+- Review Time: {TIME}
+- Reviewer: AWS Lambda Automated Review
+- Report ID: {UUID}
 ```
 
-### 4.2 Alert Configuration
+## 6. Usage Guide
 
-```yaml
-Resources:
-  HighErrorRateAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: HighLogProcessingErrorRate
-      MetricName: ErrorCount
-      Namespace: LogProcessor
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 5
-      ComparisonOperator: GreaterThanThreshold
-      AlarmActions:
-        - !Ref AlertingSNSTopic
+### 6.1 Accessing Reports
+```bash
+# Download latest report
+aws s3 cp s3://log-review-evidence/daily-reviews/latest/log-review-evidence.txt .
+
+# List all reports
+aws s3 ls s3://log-review-evidence/daily-reviews/ --recursive
 ```
 
-## 5. Cost Optimization Strategies
+### 6.2 Manual Trigger
+```bash
+# Trigger Lambda function manually
+aws lambda invoke \
+  --function-name log-review-function \
+  --payload '{}' \
+  response.json
+```
 
-1. **Log Retention**: Implement lifecycle policies for S3 and CloudWatch Logs
-2. **Query Optimization**: Use specific time ranges and filters
-3. **Compression**: Compress reports before storing in S3
-4. **Caching**: Cache frequently accessed data
-5. **Batch Processing**: Process logs in batches for better performance
+## 7. Maintenance
 
-## 6. Best Practices
+### 7.1 Regular Tasks
+1. Review and update retention policies
+2. Check S3 bucket size and cleanup if needed
+3. Update Lambda function configurations
+4. Review IAM permissions
 
-1. Use Infrastructure as Code (CloudFormation/Terraform)
-2. Implement proper error handling and retries
-3. Use parameter store for configuration
-4. Implement proper monitoring and alerting
-5. Use async/await for better performance
-6. Implement proper security controls
-7. Use compression for storage optimization
-8. Implement proper logging and tracing
+### 7.2 Monitoring
+```bash
+# Check Lambda execution logs
+aws logs get-log-events \
+  --log-group-name /aws/lambda/log-review-function \
+  --log-stream-name [STREAM_NAME]
+```
 
-## 7. Maintenance and Troubleshooting
+## 8. Troubleshooting
 
-### 7.1 Common Issues and Solutions
+### 8.1 Common Issues
 
-1. **Query Timeout**
+1. **Lambda Timeouts**
    - Increase Lambda timeout
-   - Implement pagination
-   - Optimize query filters
+   - Optimize query performance
+   - Check log volume
 
-2. **Memory Issues**
-   - Implement batch processing
-   - Optimize memory usage
-   - Use streaming for large files
+2. **Missing Logs**
+   - Verify log group names
+   - Check retention periods
+   - Validate IAM permissions
 
-3. **Performance Issues**
-   - Use caching
-   - Implement parallel processing
-   - Optimize queries
+3. **Failed Reports**
+   - Check S3 permissions
+   - Verify bucket exists
+   - Check Lambda role
 
-### 7.2 Maintenance Tasks
+### 8.2 Debugging Steps
+```bash
+# Enable DEBUG logging
+aws lambda update-function-configuration \
+  --function-name log-review-function \
+  --environment Variables={LOG_LEVEL=DEBUG}
+```
 
-1. Regular review of log retention policies
-2. Monitor and optimize costs
-3. Review and update security policies
-4. Monitor and optimize performance
-5. Regular backup and disaster recovery testing
+## 9. Security Considerations
 
-## 8. Security Considerations
+### 9.1 Data Protection
+- All reports encrypted at rest
+- TLS for data in transit
+- S3 bucket versioning enabled
+- Access logging enabled
 
-1. Encrypt data at rest and in transit
-2. Implement least privilege access
-3. Regular security audits
-4. Implement proper authentication and authorization
-5. Monitor and alert on security events
+### 9.2 Access Control
+- Least privilege IAM roles
+- S3 bucket policies
+- CloudWatch Logs encryption
+
+## 10. Compliance
+
+### 10.1 Report Retention
+- Reports retained for 90 days
+- Versioning enabled
+- Audit trail maintained
+
+### 10.2 Evidence Format
+- Timestamp on all entries
+- Reviewer identification
+- Unique report identifiers
+
+## 11. Cost Optimization
+
+### 11.1 Cost Components
+- CloudWatch Logs storage
+- Lambda execution
+- S3 storage
+- Data transfer
+
+### 11.2 Optimization Tips
+1. Adjust retention periods
+2. Optimize Lambda memory
+3. Use S3 lifecycle policies
+4. Monitor and adjust based on usage
+
+## 12. API Reference
+
+### 12.1 Lambda Function API
+```python
+def lambda_handler(event, context):
+    """
+    Entry point for the Log Review Lambda function
+    
+    Parameters:
+    event (dict): AWS Lambda event object
+    context (LambdaContext): AWS Lambda context object
+    
+    Returns:
+    dict: Response object with status code and message
+    """
+```
+
+### 12.2 CloudWatch Logs Query API
+```python
+def query_logs(log_group, start_time, end_time):
+    """
+    Query CloudWatch Logs
+    
+    Parameters:
+    log_group (str): Name of the log group to query
+    start_time (int): Start time in Unix timestamp
+    end_time (int): End time in Unix timestamp
+    
+    Returns:
+    dict: Query results
+    """
+```
+
+## 13. Change Management
+
+### 13.1 Version Control
+All changes should be tracked in version control:
+```bash
+git add .
+git commit -m "Update log review system"
+git tag v1.0.0
+```
+
+### 13.2 Deployment Process
+1. Test changes in development
+2. Update documentation
+3. Create CloudFormation change set
+4. Review and apply changes
+5. Verify deployment
