@@ -8,7 +8,7 @@
 
 </div>
 
-<p align="center"><b>🚀 Full Stack Engineer | 💡 Tech Community Leader | 🌟 Healthcare Tech Enthusiast</b></p>
+<p align="center"><b>🚀 Full Stack Engineer | 💡 Tech Community Leader | 🌟 AI Enthusiast</b></p>
 
 ---
 
