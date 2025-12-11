@@ -1,4 +1,4 @@
-# 👨‍💻 Tanmay Arora
+<center> # 👨‍💻 Tanmay Arora </center>
 
 <div align="center">
 
